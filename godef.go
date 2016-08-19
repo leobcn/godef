@@ -232,6 +232,18 @@ func done(obj *ast.Object, typ types.Type) {
 	if typ.Kind == ast.Bad || !*tflag {
 		return
 	}
+
+	// Print name, possible type and receiver prior to declaration.
+	fmt.Printf("name:%s\n", obj.Name)
+	switch decl := obj.Decl.(type) {
+	case *ast.Field:
+		fmt.Printf("type:field\n")
+	case *ast.FuncDecl:
+		if decl.Recv == nil {
+			break
+		}
+		fmt.Printf("receiver:%s\n", decl.Recv.List[0].Type.(*ast.StarExpr).X.(*ast.Ident).Name)
+	}
 	fmt.Printf("%s\n", strings.Replace(typeStr(obj, typ), "\n", "\n\t", -1))
 	if *aflag || *Aflag {
 		var m orderedObjects
