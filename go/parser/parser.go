@@ -1967,8 +1967,15 @@ func parseImportSpec(p *parser, doc *ast.CommentGroup, decl *ast.GenDecl, _ int)
 		if declIdent == nil {
 			filename := p.fset.Position(path.Pos()).Filename
 			name, err := p.pathToName(litToString(path), filepath.Dir(filename))
+
+			// TODO(unknwon): better solution would be make godef correctly handle build tags,
+			// currently just a simple hack to ignore package not found error.
 			if name == "" {
-				p.error(path.Pos(), fmt.Sprintf("cannot find identifier for package %q: %v", litToString(path), err))
+				err = nil
+			}
+
+			if err != nil {
+				p.error(path.Pos(), fmt.Sprintf("pathToName %q: %v", litToString(path), err))
 			} else {
 				declIdent = &ast.Ident{NamePos: path.ValuePos, Name: name}
 			}
