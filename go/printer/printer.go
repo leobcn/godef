@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"text/tabwriter"
 
-	"github.com/rogpeppe/godef/go/ast"
-	"github.com/rogpeppe/godef/go/token"
+	"github.com/sourcegraph/godef/go/ast"
+	"github.com/sourcegraph/godef/go/token"
 )
 
 const debug = false // enable for debugging
