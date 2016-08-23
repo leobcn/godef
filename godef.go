@@ -101,7 +101,7 @@ func main() {
 		if err != nil {
 			fail("error finding import path for %s: %s", path, err)
 		}
-		fmt.Println(pkg.Dir)
+		fmt.Printf(`{"position": {"is_dir": true, "path": "%s"}}`+"\n", pkg.Dir)
 	case ast.Expr:
 		if !*tflag {
 			// try local declarations only
@@ -201,6 +201,33 @@ func findIdentifier(f *ast.File, searchpos int) ast.Node {
 	return ev
 }
 
+type outputPosition struct {
+	rawPos token.Position `json:"-"`
+
+	IsDir  bool   `json:"is_dir,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	Column int    `json:"column,omitempty"`
+}
+
+type outputMember struct {
+	Decl     string          `json:"decl,omitempty"`
+	Position *outputPosition `json:"position,omitempty"`
+}
+
+type outputType struct {
+	Name     string          `json:"name,omitempty"`
+	IsField  bool            `json:"is_field,omitempty"`
+	Receiver string          `json:"receiver,omitempty"`
+	Decl     string          `json:"decl,omitempty"`
+	Members  []*outputMember `json:"members,omitempty"`
+}
+
+type outputResult struct {
+	Position *outputPosition `json:"position,omitempty"`
+	Type     *outputType     `json:"type,omitempty"`
+}
+
 type orderedObjects []*ast.Object
 
 func (o orderedObjects) Less(i, j int) bool { return o[i].Name < o[j].Name }
@@ -209,59 +236,87 @@ func (o orderedObjects) Swap(i, j int)      { o[i], o[j] = o[j], o[i] }
 
 func done(obj *ast.Object, typ types.Type) {
 	defer os.Exit(0)
+
 	pos := types.FileSet.Position(types.DeclPos(obj))
-	if *jsonFlag {
-		p := struct {
-			Filename string `json:"filename,omitempty"`
-			Line     int    `json:"line,omitempty"`
-			Column   int    `json:"column,omitempty"`
-		}{
-			Filename: pos.Filename,
-			Line:     pos.Line,
-			Column:   pos.Column,
-		}
-		jsonStr, err := json.Marshal(p)
-		if err != nil {
-			fail("JSON marshal error: %v", err)
-		}
-		fmt.Printf("%s\n", jsonStr)
-		return
-	} else {
-		fmt.Printf("%v\n", pos)
+	result := outputResult{
+		Position: &outputPosition{
+			Path:   pos.Filename,
+			Line:   pos.Line,
+			Column: pos.Column,
+		},
 	}
+
+	defer func() {
+		if *jsonFlag {
+			if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+				fail("JSON marshal error: %v", err)
+			}
+			return
+		}
+
+		fmt.Printf("%v\n", pos)
+		fmt.Printf("name:%s\n", obj.Name)
+		if result.Type.IsField {
+			fmt.Printf("type:field\n")
+		}
+		if result.Type.Receiver != "" {
+			fmt.Printf("receiver:%s\n", result.Type.Receiver)
+		}
+		fmt.Println(strings.Replace(result.Type.Decl, "\n", "\n\t", -1))
+		for _, m := range result.Type.Members {
+			fmt.Printf("\t%s\n", m.Decl)
+			fmt.Printf("\t\t%v\n", m.Position.rawPos)
+		}
+	}()
+
 	if typ.Kind == ast.Bad || !*tflag {
 		return
 	}
 
-	// Print name, possible type and receiver prior to declaration.
-	fmt.Printf("name:%s\n", obj.Name)
+	result.Type = &outputType{
+		Name: obj.Name,
+	}
+
 	switch decl := obj.Decl.(type) {
 	case *ast.Field:
-		fmt.Printf("type:field\n")
+		result.Type.IsField = true
 	case *ast.FuncDecl:
 		if decl.Recv == nil {
 			break
 		}
-		fmt.Printf("receiver:%s\n", decl.Recv.List[0].Type.(*ast.StarExpr).X.(*ast.Ident).Name)
+		result.Type.Receiver = decl.Recv.List[0].Type.(*ast.StarExpr).X.(*ast.Ident).Name
 	}
-	fmt.Printf("%s\n", strings.Replace(typeStr(obj, typ), "\n", "\n\t", -1))
-	if *aflag || *Aflag {
-		var m orderedObjects
-		for obj := range typ.Iter() {
-			m = append(m, obj)
+	result.Type.Decl = typeStr(obj, typ)
+
+	if !*aflag && !*Aflag {
+		return
+	}
+
+	var m orderedObjects
+	for obj := range typ.Iter() {
+		m = append(m, obj)
+	}
+	sort.Sort(m)
+
+	result.Type.Members = make([]*outputMember, 0, len(m))
+	for _, obj := range m {
+		// Ignore unexported members unless Aflag is set.
+		if !*Aflag && (typ.Pkg != "" || !ast.IsExported(obj.Name)) {
+			continue
 		}
-		sort.Sort(m)
-		for _, obj := range m {
-			// Ignore unexported members unless Aflag is set.
-			if !*Aflag && (typ.Pkg != "" || !ast.IsExported(obj.Name)) {
-				continue
-			}
-			id := ast.NewIdent(obj.Name)
-			id.Obj = obj
-			_, mt := types.ExprType(id, types.DefaultImporter, types.FileSet)
-			fmt.Printf("\t%s\n", strings.Replace(typeStr(obj, mt), "\n", "\n\t\t", -1))
-			fmt.Printf("\t\t%v\n", types.FileSet.Position(types.DeclPos(obj)))
-		}
+		id := ast.NewIdent(obj.Name)
+		id.Obj = obj
+		_, mt := types.ExprType(id, types.DefaultImporter, types.FileSet)
+		pos := types.FileSet.Position(types.DeclPos(obj))
+		result.Type.Members = append(result.Type.Members, &outputMember{
+			Decl: strings.Replace(typeStr(obj, mt), "\n", "\n\t\t", -1),
+			Position: &outputPosition{
+				rawPos: pos,
+				Path:   pos.Filename,
+				Line:   pos.Line,
+				Column: pos.Column,
+			},
+		})
 	}
 }
 
